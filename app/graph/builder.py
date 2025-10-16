@@ -24,7 +24,7 @@ def build_root_graph(deps: RootGraphDeps):
 
     graph = StateGraph(RootState)
 
-    def maybe_ocr(state: RootState) -> RootState:
+    def ocr(state: RootState) -> RootState:
         images = state.get("images", [])
         if images:
             try:
@@ -83,7 +83,7 @@ def build_root_graph(deps: RootGraphDeps):
             "reply_to_user": state.get("reply_to_user", ""),
         }
 
-    graph.add_node("maybe_ocr", maybe_ocr)
+    graph.add_node("ocr", ocr)
     graph.add_node("build_query", build_query)
     graph.add_node("search_video", search_video)
     graph.add_node("search_textbook", search_textbook)
@@ -91,8 +91,8 @@ def build_root_graph(deps: RootGraphDeps):
     graph.add_node("math_agent", math_reasoning)
     graph.add_node("format_output", format_output)
 
-    graph.add_edge(START, "maybe_ocr")
-    graph.add_edge("maybe_ocr", "build_query")
+    graph.add_edge(START, "ocr")
+    graph.add_edge("ocr", "build_query")
     graph.add_edge("build_query", "search_video")
     graph.add_edge("build_query", "search_textbook")
     graph.add_edge("search_video", "join")

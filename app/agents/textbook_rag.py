@@ -12,8 +12,8 @@ import numpy as np
 import faiss
 from dashscope import TextEmbedding
 
-from config import Config
-from protocols import TextbookRAG as TextbookRAGProtocol
+from app.config import Config
+from .protocols import TextbookRAG as TextbookRAGProtocol
 
 class TextbookRAG:
     """RAG pipeline: build() to index, search() to query. Only expose these two methods."""
@@ -324,7 +324,11 @@ class TextbookRAG:
             instruct="Given a knowledge point, retrieve relevant sectionn in textbook",
             api_key=self.EMBED_API_KEY,
         )
-        emb = resp.output["embeddings"][0]["embedding"]
+        try:
+            emb = resp.output["embeddings"][0]["embedding"]
+        except Exception as e:
+            print(resp)
+            raise e
         return np.array(emb, dtype=np.float32)
 
     # ---- FAISS I/O ----

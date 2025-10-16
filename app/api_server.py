@@ -17,7 +17,7 @@ app = FastAPI(title="Multi-Agent Root API")
 
 deps = RootGraphDeps(
     video_rag=MockVideoRAG(),
-    textbook_rag=MockTextbookRAG(),
+    textbook_rag=TextbookRAG(),
     ocr_agent=SimpleOCR(),
     math_agent=TemplateMathAgent(),
 )
