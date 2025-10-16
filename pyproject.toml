@@ -1,0 +1,18 @@
+[project]
+name = "mathmate"
+version = "0.1.0"
+description = "Multi-agent workflow for answering math questions with LangGraph"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph>=0.2.0",
+    "pydantic>=2.7",
+    "Pillow>=10.0",
+    "pytesseract>=0.3.10",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

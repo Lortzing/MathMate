@@ -41,12 +41,20 @@ app/
 
 ## Installation
 
-Create a virtual environment and install dependencies:
+Create a virtual environment and install dependencies with
+[uv](https://github.com/astral-sh/uv):
 
 ```bash
-python -m venv .venv
+uv venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r app/requirements.txt
+uv pip install -r app/requirements.txt
+```
+
+If you prefer to keep everything in sync with the `pyproject.toml`, you can
+also run:
+
+```bash
+uv sync
 ```
 
 ## Usage
