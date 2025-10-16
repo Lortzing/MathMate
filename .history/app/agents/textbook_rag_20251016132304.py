@@ -15,11 +15,11 @@ from dashscope import TextEmbedding
 from config import Config
 from protocols import TextbookRAG as TextbookRAGProtocol
 
-class TextbookRAG:
+class TextBookRAG(TextbookRAGProtocol):
     """RAG pipeline: build() to index, search() to query. Only expose these two methods."""
 
     # -------------------- public API --------------------
-    def __init__(self, *, top_k: int | None = None) -> None:
+    def __init__(self, *, top_k: int = 5) -> None:
         # config
         self.PAGE_OPEN_RE = Config.PAGE_OPEN_RE
         self.PAGE_CLOSE_RE = Config.PAGE_CLOSE_RE
@@ -28,12 +28,12 @@ class TextbookRAG:
         self.INDEX_PATH: Path = Config.INDEX_PATH
         self.META_PATH: Path = Config.META_PATH
 
-        self.EMBED_API_KEY: Optional[str] = Config.EMBED_API_KEY
-        self.EMBED_BASE_URL: Optional[str] = Config.EMBED_BASE_URL  # 未直接使用，但保留
-        self.EMBED_DIM: int = Config.EMBED_DIM
-        self.EMBED_MODEL: str = Config.EMBED_MODEL
+        self.API_KEY: Optional[str] = Config.EMBED_API_KEY
+        self.BASE_URL: Optional[str] = Config.EMBED_BASE_URL  # 未直接使用，但保留
+        self.DIM: int = Config.EMBED_DIM
+        self.MODEL: str = Config.EMBED_MODEL
 
-        self.top_k = top_k or Config.RAG_TOP_K
+        self.top_k = top_k
 
     def build(self, document_path: Path) -> None:
         """
@@ -67,20 +67,20 @@ class TextbookRAG:
         vecs = self._normalize(vecs)
 
         # 3) FAISS 索引写入
-        index = self._build_faiss(self.EMBED_DIM)
+        index = self._build_faiss(self.DIM)
         index.add(vecs)
 
         meta = {
-            "dim": self.EMBED_DIM,
+            "dim": self.DIM,
             "size": len(all_chunks),
             "chunks": all_chunks,   # 简单 JSON 存储；生产可换 SQLite/Parquet
             "source": [str(p) for p in paths],
-            "model": self.EMBED_MODEL,
+            "model": self.MODEL,
         }
         self._save_index(index, meta)
         print(f"[索引] 完成：向量条目 {meta['size']}，写入 {self.INDEX_PATH} / {self.META_PATH}")
 
-    def search(self, query: str) -> str:
+    def search(self, query: str) -> List[Tuple[int, float]]:
         """
         用 DashScope 生成查询向量 → FAISS Top-k 检索。
         返回 [(chunk_idx, score), ...]，chunk_idx 可到 meta['chunks'][i] 取对应内容。
@@ -98,7 +98,7 @@ class TextbookRAG:
         print("==== 命中切片（用于答案的上下文） ====")
         print(self._build_context(meta, hits))
 
-        return self._build_context(meta, hits)
+        return hits
 
     # -------------------- private helpers --------------------
     def _resolve_paths(self, p: Path) -> List[Path]:
@@ -304,9 +304,9 @@ class TextbookRAG:
         emb_matrix, errors = asyncio.run(
             self._embed_documents_async(
                 documents,
-                model=self.EMBED_MODEL,
-                dim=self.EMBED_DIM,
-                api_key=self.EMBED_API_KEY,
+                model=self.MODEL,
+                dim=self.DIM,
+                api_key=self.API_KEY,
                 text_type="document",
             )
         )
@@ -317,12 +317,12 @@ class TextbookRAG:
 
     def _embed_query(self, query: str) -> np.ndarray:
         resp = TextEmbedding.call(
-            model=self.EMBED_MODEL,
+            model=self.MODEL,
             input=query,
-            dimension=self.EMBED_DIM,
+            dimension=self.DIM,
             text_type="query",
             instruct="Given a knowledge point, retrieve relevant sectionn in textbook",
-            api_key=self.EMBED_API_KEY,
+            api_key=self.API_KEY,
         )
         emb = resp.output["embeddings"][0]["embedding"]
         return np.array(emb, dtype=np.float32)
@@ -367,7 +367,7 @@ def _main():
     p_search.add_argument("q", type=str, help="用户问题")
 
     args = parser.parse_args()
-    rag = TextbookRAG(top_k=5)
+    rag = RAG(top_k=5)
 
     if args.cmd == "build":
         rag.build(args.path)

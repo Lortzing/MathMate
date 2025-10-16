@@ -9,7 +9,6 @@ class VideoRAG(Protocol):
 
     def search(self, query: str) -> Dict[str, Any]:
         """Search for video resources relevant to the query."""
-        ...
 
 
 @runtime_checkable
@@ -18,7 +17,7 @@ class TextbookRAG(Protocol):
 
     def search(self, query: str) -> str:
         """Search for textbook resources relevant to the query."""
-        ...
+        pass
 
 
 @runtime_checkable
@@ -27,7 +26,7 @@ class OCRAgent(Protocol):
 
     def run(self, images: List[bytes]) -> str:
         """Return textual transcription for the provided image bytes."""
-        ...
+
 
 @runtime_checkable
 class MathAgent(Protocol):
@@ -41,4 +40,3 @@ class MathAgent(Protocol):
         ocr_text: str,
     ) -> str:
         """Return a detailed explanation for the user's question."""
-        ...

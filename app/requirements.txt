@@ -1,6 +1,0 @@
-langgraph>=0.2.0
-pydantic>=2.7
-Pillow>=10.0
-pytesseract>=0.3.10
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0

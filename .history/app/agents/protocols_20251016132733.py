@@ -9,7 +9,6 @@ class VideoRAG(Protocol):
 
     def search(self, query: str) -> Dict[str, Any]:
         """Search for video resources relevant to the query."""
-        ...
 
 
 @runtime_checkable

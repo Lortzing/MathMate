@@ -25,8 +25,8 @@ class Config:
     
     
     RAG_TOP_K = 5
-    INDEX_PATH = Path("./textbook_embed/vector/faiss_index.index")
-    META_PATH = Path("./textbook_embed/meta/faiss_meta.json")
+    INDEX_PATH = Path("./textbook_embed/faiss_index.index")
+    META_PATH = Path("./textbook_embed/faiss_meta.json")
     PAGE_OPEN_RE  = re.compile(r"<page\b[^>]*>", re.IGNORECASE)
     PAGE_CLOSE_RE = re.compile(r"</page\b[^>]*>", re.IGNORECASE)
     HEAD_RE       = re.compile(r"^(#{1,6})\s+(.*)$", re.M)

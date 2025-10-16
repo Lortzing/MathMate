@@ -15,11 +15,11 @@ from dashscope import TextEmbedding
 from config import Config
 from protocols import TextbookRAG as TextbookRAGProtocol
 
-class TextbookRAG:
+class TextbookRAG(TextbookRAGProtocol):
     """RAG pipeline: build() to index, search() to query. Only expose these two methods."""
 
     # -------------------- public API --------------------
-    def __init__(self, *, top_k: int | None = None) -> None:
+    def __init__(self, *, top_k: int = 5) -> None:
         # config
         self.PAGE_OPEN_RE = Config.PAGE_OPEN_RE
         self.PAGE_CLOSE_RE = Config.PAGE_CLOSE_RE

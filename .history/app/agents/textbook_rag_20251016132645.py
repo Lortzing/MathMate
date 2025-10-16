@@ -15,7 +15,7 @@ from dashscope import TextEmbedding
 from config import Config
 from protocols import TextbookRAG as TextbookRAGProtocol
 
-class TextbookRAG:
+class TextbookRAG(TextbookRAGProtocol):
     """RAG pipeline: build() to index, search() to query. Only expose these two methods."""
 
     # -------------------- public API --------------------

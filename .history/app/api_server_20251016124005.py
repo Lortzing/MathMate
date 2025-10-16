@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, Form, UploadFile
 from pydantic import BaseModel
 
 from app.agents import (
-    TextbookRAG,
+    MockTextbookRAG,
     MockVideoRAG,
     SimpleOCR,
     TemplateMathAgent,

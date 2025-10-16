@@ -12,7 +12,7 @@ import numpy as np
 import faiss
 from dashscope import TextEmbedding
 
-from config import Config
+from app.config import Config
 from protocols import TextbookRAG as TextbookRAGProtocol
 
 class TextbookRAG:
