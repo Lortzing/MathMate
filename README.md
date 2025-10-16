@@ -1,4 +1,4 @@
-# MathMate – LangGraph Multi-Agent System
+# MathMate
 
 This project demonstrates how to orchestrate a multi-agent workflow with
 [LangGraph](https://github.com/langchain-ai/langgraph). The system features a
