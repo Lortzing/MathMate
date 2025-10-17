@@ -17,6 +17,9 @@ dependencies = [
     "dashscope>=1.24.6",
     "pytest>=8.4.2",
     "openai>=2.3.0",
+    "copilotkit>=0.1.69",
+    "ag-ui-langgraph>=0.0.17",
+    "python-dotenv>=1.0.1",
 ]
 
 [tool.pytest.ini_options]

@@ -170,6 +170,12 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# Frontend builds
+frontend/.next/
+frontend/node_modules/
+frontend/.turbo/
+frontend/out/
+
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
@@ -216,3 +222,7 @@ __marimo__/
 *.json
 
 !README.md
+!langgraph.json
+!frontend/package.json
+!frontend/tsconfig.json
+!frontend/.eslintrc.json

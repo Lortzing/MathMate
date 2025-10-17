@@ -5,23 +5,11 @@ from typing import Any, Dict, List
 from fastapi import FastAPI, File, Form, UploadFile
 from pydantic import BaseModel
 
-from app.agents import (
-    TextbookRAG,
-    MockVideoRAG,
-    OCRAgent,
-    MathAgent,
-)
-from app.graph import RootGraphDeps, build_root_graph
+from app.graph import create_default_graph
 
 app = FastAPI(title="Multi-Agent Root API")
 
-deps = RootGraphDeps(
-    video_rag=MockVideoRAG(),
-    textbook_rag=TextbookRAG(),
-    ocr_agent=OCRAgent(),
-    math_agent=MathAgent(),
-)
-root_graph = build_root_graph(deps)
+root_graph = create_default_graph()
 
 
 class AskPayload(BaseModel):

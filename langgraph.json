@@ -1,0 +1,8 @@
+{
+  "agents": [
+    {
+      "name": "mathmate",
+      "description": "MathMate root orchestrator for LangGraph AGUI"
+    }
+  ]
+}

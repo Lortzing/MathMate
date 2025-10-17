@@ -102,6 +102,45 @@ curl -X POST http://localhost:8000/ask-multipart \
   -F "files=@/path/to/problem.png"
 ```
 
+### CopilotKit + LangGraph AGUI Frontend
+
+This repository now ships with a Next.js interface powered by CopilotKit and
+LangGraph AGUI. The frontend streams intermediate tool calls from the LangGraph
+workflow so you can inspect how MathMate reaches its conclusions.
+
+1. Copy `.env.example` to `.env` and fill in your `LANGSMITH_API_KEY`.
+2. Start the Copilot-aware FastAPI service:
+
+   ```bash
+   uvicorn app.copilot_server:app --reload --port 8000
+   ```
+
+3. In a new terminal, set up the Copilot runtime proxy:
+
+   ```bash
+   cd frontend
+   npm install
+   npm run runtime
+   ```
+
+   The runtime listens on `http://localhost:4000/copilotkit` by default and
+   forwards chat traffic to the FastAPI AGUI endpoint defined at
+   `http://localhost:8000/agents/mathmate`.
+
+4. Finally, launch the Next.js development server:
+
+   ```bash
+   npm run dev
+   ```
+
+   Visit `http://localhost:3000` to interact with the MathMate Copilot. You can
+   override defaults (agent name, runtime URL, etc.) via the `NEXT_PUBLIC_*`
+   variables defined in `frontend/app/providers.tsx`.
+
+Both servers expose `/health` endpoints for deployment probes. Adjust the
+`COPILOT_AGENT_NAME`, `COPILOT_AGENT_PATH`, or `COPILOTKIT_AGENT_URL`
+environment variables if you change routing in production.
+
 ## Extending the System
 
 - Replace mock RAG implementations in `app/agents/video_rag.py` and
