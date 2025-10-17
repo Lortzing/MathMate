@@ -1,13 +1,7 @@
 from __future__ import annotations
-
 import argparse
 
-from app.agents import (
-    MockTextbookRAG,
-    MockVideoRAG,
-    SimpleOCR,
-    TemplateMathAgent,
-)
+from app.agents import MathAgent, MockVideoRAG, OCRAgent, TextbookRAG
 from app.graph import RootGraphDeps, build_root_graph
 from app.utils import get_logger, load_image_bytes
 
@@ -32,9 +26,9 @@ def run_cli() -> None:
 
     deps = RootGraphDeps(
         video_rag=MockVideoRAG(),
-        textbook_rag=MockTextbookRAG(),
-        ocr_agent=SimpleOCR(),
-        math_agent=TemplateMathAgent(),
+        textbook_rag=TextbookRAG(),
+        ocr_agent=OCRAgent(),
+        math_agent=MathAgent(),
     )
     graph_app = build_root_graph(deps)
 
