@@ -1,8 +1,8 @@
-from .protocols import MathAgent, OCRAgent, TextbookRAG, VideoRAG
+from .protocols import MathAgentProtocol, OCRAgentProtocol, TextbookRAGProtocol, VideoRAGProtocol
 from .video_rag import MockVideoRAG
 from .textbook_rag import TextbookRAG
-from .ocr_agent import SimpleOCR
-from .math_agent import TemplateMathAgent
+from .ocr_agent import OCRAgent
+from .math_agent import MathAgent
 
 __all__ = [
     "VideoRAG",
@@ -11,6 +11,6 @@ __all__ = [
     "MathAgent",
     "MockVideoRAG",
     "TextbookRAG",
-    "SimpleOCR",
-    "TemplateMathAgent",
+    "OCRAgent",
+    "MathAgent",
 ]

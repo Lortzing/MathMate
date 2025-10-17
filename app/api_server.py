@@ -8,8 +8,8 @@ from pydantic import BaseModel
 from app.agents import (
     TextbookRAG,
     MockVideoRAG,
-    SimpleOCR,
-    TemplateMathAgent,
+    OCRAgent,
+    MathAgent,
 )
 from app.graph import RootGraphDeps, build_root_graph
 
@@ -18,8 +18,8 @@ app = FastAPI(title="Multi-Agent Root API")
 deps = RootGraphDeps(
     video_rag=MockVideoRAG(),
     textbook_rag=TextbookRAG(),
-    ocr_agent=SimpleOCR(),
-    math_agent=TemplateMathAgent(),
+    ocr_agent=OCRAgent(),
+    math_agent=MathAgent(),
 )
 root_graph = build_root_graph(deps)
 

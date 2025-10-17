@@ -13,13 +13,13 @@ import faiss
 from dashscope import TextEmbedding
 
 from app.config import Config
-from .protocols import TextbookRAG as TextbookRAGProtocol
+from .protocols import TextbookRAGProtocol
 
 PAGE_OPEN_RE  = re.compile(r"<page\b[^>]*>", re.IGNORECASE)
 PAGE_CLOSE_RE = re.compile(r"</page\b[^>]*>", re.IGNORECASE)
 HEAD_RE       = re.compile(r"^(#{1,6})\s+(.*)$", re.M)
 
-class TextbookRAG:
+class TextbookRAG(TextbookRAGProtocol):
     """RAG pipeline: build() to index, search() to query. Only expose these two methods."""
 
     # -------------------- public API --------------------
@@ -118,7 +118,7 @@ class TextbookRAG:
         return path.read_text(encoding="utf-8", errors="ignore")
 
     def _pick_most_frequent_heading_level(self, text: str, prefer_deeper_on_tie: bool = True) -> Optional[int]:
-        cnt = Counter(len(m.group(1)) for m in self.HEAD_RE.finditer(text))
+        cnt = Counter(len(m.group(1)) for m in HEAD_RE.finditer(text))
         if not cnt:
             return None
         max_freq = max(cnt.values())
@@ -129,13 +129,13 @@ class TextbookRAG:
     def _align_to_page_boundaries(self, s: str, start: int, end: int) -> Tuple[int, int]:
         adj_start = start
         last_open = None
-        for m in self.PAGE_OPEN_RE.finditer(s, 0, max(0, start)):
+        for m in PAGE_OPEN_RE.finditer(s, 0, max(0, start)):
             last_open = m
         if last_open:
             adj_start = last_open.start()
 
         adj_end = end
-        next_close = self.PAGE_CLOSE_RE.search(s, min(len(s), end))
+        next_close = PAGE_CLOSE_RE.search(s, min(len(s), end))
         if next_close:
             adj_end = next_close.end()
 

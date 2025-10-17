@@ -65,6 +65,8 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 
+assets/
+
 # Scrapy stuff:
 .scrapy
 
