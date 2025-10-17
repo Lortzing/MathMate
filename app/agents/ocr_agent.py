@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import List
 
 
-@dataclass
 class SimpleOCR:
     """Placeholder OCR agent.
 

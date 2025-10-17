@@ -36,9 +36,7 @@ class MathAgent(Protocol):
     def explain(
         self,
         question: str,
-        video_ctx: Dict[str, Any],
-        textbook_ctx: Dict[str, Any],
-        ocr_text: str,
+        instruction: str,
     ) -> str:
         """Return a detailed explanation for the user's question."""
         ...

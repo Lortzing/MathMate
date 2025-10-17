@@ -1,36 +1,39 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict
+from openai import OpenAI
+
+from typing import Any, Dict, Optional, Literal
+from .protocols import MathAgent as MathAgentProtocol
+from app.config import Config
 
 
-@dataclass
-class TemplateMathAgent:
-    """Template math agent that can be swapped out for a real LLM."""
+API_KEY = Config.MATH_API_KEY
+BASE_URL = Config.MATH_BASE_URL
+MODEL = Config.MATH_MODEL
+
+
+class MathAgent:    
+    def __init__(self):        
+        self.client = OpenAI(
+            api_key=API_KEY,
+            base_url=BASE_URL,
+        )    
+    def _call_model(self, messages: dict) -> str | None:
+        completion = self.client.chat.completions.create(
+            model=MODEL,
+            messages=[{'role': 'user', 'content': 'Derive a universal solution for the quadratic equation $ Ax^2+Bx+C=0 $'}])
+        try: 
+            result = completion.choices[0].message.content
+            return result
+        except Exception as e:
+            print(completion)
+            raise e
+        
 
     def explain(
         self,
         question: str,
-        video_ctx: Dict[str, Any],
-        textbook_ctx: Dict[str, Any],
-        ocr_text: str,
+        instruction: Literal["Answer", "Explain",  "Multi-ideas"],
+        prompt: str | None
     ) -> str:
-        bullets = []
-        if ocr_text:
-            bullets.append(f"- 我从图片中读到了（OCR）：{ocr_text[:160]}...")
-        if video_ctx.get("hits"):
-            topv = video_ctx["hits"][0]
-            bullets.append(
-                f"- 推荐优先看视频：{topv.get('title')}（相关性较高，得分 {topv.get('score')}）"
-            )
-        if textbook_ctx.get("hits"):
-            topb = textbook_ctx["hits"][0]
-            bullets.append(
-                "- 教材参考："
-                f"{topb.get('book')} · {topb.get('section')} · p.{topb.get('page')}"
-            )
-        bullets.append(
-            "- 解题思路：先检查是否可代换 u=ax+b 简化结构；若存在乘积项，可考虑分部积分。"
-        )
-        summary = "\n".join(bullets) if bullets else "- 暂无上下文建议，建议先复习相关概念。"
-        return f"你的问题：{question}\n\n建议：\n{summary}"
+        ...

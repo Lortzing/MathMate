@@ -15,16 +15,16 @@ from dashscope import TextEmbedding
 from app.config import Config
 from .protocols import TextbookRAG as TextbookRAGProtocol
 
+PAGE_OPEN_RE  = re.compile(r"<page\b[^>]*>", re.IGNORECASE)
+PAGE_CLOSE_RE = re.compile(r"</page\b[^>]*>", re.IGNORECASE)
+HEAD_RE       = re.compile(r"^(#{1,6})\s+(.*)$", re.M)
+
 class TextbookRAG:
     """RAG pipeline: build() to index, search() to query. Only expose these two methods."""
 
     # -------------------- public API --------------------
     def __init__(self, *, top_k: int | None = None) -> None:
         # config
-        self.PAGE_OPEN_RE = Config.PAGE_OPEN_RE
-        self.PAGE_CLOSE_RE = Config.PAGE_CLOSE_RE
-        self.HEAD_RE = Config.HEAD_RE
-
         self.INDEX_PATH: Path = Config.INDEX_PATH
         self.META_PATH: Path = Config.META_PATH
 
