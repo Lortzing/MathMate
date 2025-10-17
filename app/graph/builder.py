@@ -2,18 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict
+from io import BytesIO
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agents import MathAgent, OCRAgent, TextbookRAG, VideoRAG
+from app.agents import MathAgent, OCRAgent, TextbookRAG, MockVideoRAG
 from .state import RootState
 
 
 @dataclass
 class RootGraphDeps:
-    """Dependencies injected into the root graph builder."""
-
-    video_rag: VideoRAG
+    video_rag: MockVideoRAG
     textbook_rag: TextbookRAG
     ocr_agent: OCRAgent
     math_agent: MathAgent
@@ -27,11 +26,14 @@ def build_root_graph(deps: RootGraphDeps):
     def ocr(state: RootState) -> RootState:
         images = state.get("images", [])
         if images:
-            try:
-                text = deps.ocr_agent.run(images)
-            except Exception:
-                text = ""
-            return {"ocr_text": text}
+            texts = []
+            for img in images:
+                try:
+                    text = deps.ocr_agent.run(BytesIO(img))
+                except Exception:
+                    text = ""
+                texts.append(text)
+            return {"ocr_text": "\n".join([f"No. {i} pictures, content: {txt}" for i, txt in enumerate(texts) if txt])}
         return {}
 
     def build_query(state: RootState) -> RootState:
