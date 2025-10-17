@@ -26,7 +26,7 @@ class TextbookRAGProtocol(Protocol):
 class OCRAgentProtocol(Protocol):
     """Protocol for OCR agents used to transcribe images to text."""
 
-    def run(self, images: BytesIO | list[BytesIO]) -> str:
+    def run(self, images: BytesIO) -> str:
         """Return textual transcription for the provided image bytes."""
         ...
 

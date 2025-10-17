@@ -68,32 +68,13 @@ class OCRAgent(OCRAgentProtocol):
             print(completion)
             raise e
 
-    def run(self, images: BytesIO | list[BytesIO]) -> str:
-        """
-        兼容两种用法：
-        1) 传入单个 BytesIO
-        2) 传入可迭代的 BytesIO（例如 [BytesIO, BytesIO, ...]）
-        返回模型输出的文本（Markdown 或纯文本）。
-        """
+    def run(self, images: BytesIO) -> str:
         if images is None:
             return ""
 
-
-        if hasattr(images, "read"):  # 单个 BytesIO
-            streams: list[BytesIO] = [images]  # type: ignore[assignment]
-        else:
-            try:
-                streams = list(images)  # type: ignore[arg-type]
-            except TypeError:
-                raise TypeError("OCRAgent.run(images): expected a BytesIO or an iterable of BytesIO")
-
-        if not streams:
-            return ""
-
         content: list[dict[str, Any]] = [{"type": "text", "text": DEFAULT_OCR_PROMPT}]
-        for s in streams:
-            data_url = self._bytesio_to_data_url(s)
-            content.append({"type": "image_url", "image_url": {"url": data_url}})
+        data_url = self._bytesio_to_data_url(images)
+        content.append({"type": "image_url", "image_url": {"url": data_url}})
 
         messages = [{"role": "user", "content": content}]
 
