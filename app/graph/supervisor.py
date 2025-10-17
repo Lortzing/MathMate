@@ -140,4 +140,3 @@ class RootSupervisor:
         if combined and not has_math:
             return Action(next="math", reason="Generate math explanation")
         return Action(next="finalize", reason="All steps completed or nothing to do")
-*** End of File

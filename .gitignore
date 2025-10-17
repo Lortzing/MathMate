@@ -216,6 +216,7 @@ __marimo__/
 
 
 .history/
+node_modules/
 
 *.pdf
 *.md
