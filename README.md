@@ -2,12 +2,25 @@
 
 This project demonstrates how to orchestrate a multi-agent workflow with
 [LangGraph](https://github.com/langchain-ai/langgraph). The system features a
-root agent that coordinates several specialized tools to answer user math
-questions.
+root supervisor agent that coordinates several specialized tools to answer user
+math questions.
 
 ## Architecture Overview
 
-The root agent can invoke the following components:
+The root supervisor (powered by **qwen3-plus**) calls an LLM every time it needs
+to decide what happens next. The model receives a sanitized view of the shared
+state and returns a structured decision:
+
+```json
+{"next": "math", "params": {"instruction": "Solve"}, "reason": "..."}
+```
+
+All tool parameters (for OCR, query construction, retrieval, and the math
+solver) flow through this JSON payload, so you can dynamically steer the entire
+pipeline from a single place. When the model is unavailable, a deterministic
+fallback policy keeps the workflow running.
+
+The supervisor can invoke the following components:
 
 - **video_rag** – retrieves related instructional videos.
 - **textbook_rag** – retrieves textbook references.
@@ -31,7 +44,10 @@ Every response conforms to the structure:
 ```
 app/
 ├── agents/          # Tool and agent implementations
-├── graph/           # LangGraph state + builder
+├── graph/           # LangGraph state, supervisor, and builder
+│   ├── builder.py    # LangGraph wiring + tool nodes
+│   ├── state.py      # Shared state definition
+│   └── supervisor.py # Root supervisor (LLM-driven routing)
 ├── utils/           # Shared utilities (logging, image helpers)
 ├── api_server.py    # Optional FastAPI server (JSON + multipart endpoints)
 ├── config.py        # Runtime configuration dataclass
@@ -94,6 +110,8 @@ curl -X POST http://localhost:8000/ask-multipart \
   engine (e.g. Tesseract, PaddleOCR, or a multimodal model).
 - Connect the math agent (`app/agents/math_agent.py`) to your preferred LLM
   for detailed explanations.
+- Adjust the routing policy in `app/graph/supervisor.py` if you want to prompt
+  qwen3-plus differently or plug in additional tools.
 
 ## License
 

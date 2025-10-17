@@ -1,106 +1,242 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Any, Dict
 from io import BytesIO
+from typing import Any, Dict, Mapping, cast
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agents import MathAgent, OCRAgent, TextbookRAG, MockVideoRAG
+from app.agents.protocols import (
+    MathAgentProtocol,
+    OCRAgentProtocol,
+    TextbookRAGProtocol,
+    VideoRAGProtocol,
+    Instruction,
+)
+from app.utils import get_logger
+
 from .state import RootState
+from .supervisor import RootSupervisor
+
+
+logger = get_logger("root-graph")
 
 
 @dataclass
 class RootGraphDeps:
-    video_rag: MockVideoRAG
-    textbook_rag: TextbookRAG
-    ocr_agent: OCRAgent
-    math_agent: MathAgent
+    video_rag: VideoRAGProtocol
+    textbook_rag: TextbookRAGProtocol
+    ocr_agent: OCRAgentProtocol
+    math_agent: MathAgentProtocol
+    supervisor: RootSupervisor | None = None
+
+
+_ALLOWED_INSTRUCTIONS: set[str] = {
+    "Solve",
+    "GenerateProblems",
+    "MultiMethods",
+    "ExplainStep",
+    "Heuristic",
+}
 
 
 def build_root_graph(deps: RootGraphDeps):
-    """Construct and compile the root LangGraph workflow."""
+    """Construct and compile the root LangGraph workflow driven by the supervisor."""
 
+    supervisor = deps.supervisor or RootSupervisor()
     graph = StateGraph(RootState)
 
+    def _current_params(state: RootState) -> Dict[str, Any]:
+        decision = state.get("decision") or {}
+        if isinstance(decision, Mapping):
+            params = decision.get("params", {})
+        else:
+            params = {}
+        return params if isinstance(params, dict) else {}
+
+    def supervisor_node(state: RootState) -> RootState:
+        action = supervisor.decide(state)
+        logger.debug("Supervisor decided: %s", action)
+        return {
+            "decision": {
+                "next": action.next,
+                "params": action.params,
+                "reason": action.reason,
+            }
+        }
+
     def ocr(state: RootState) -> RootState:
+        params = _current_params(state)
         images = state.get("images", [])
-        if images:
-            texts = []
-            for img in images:
-                try:
-                    text = deps.ocr_agent.run(BytesIO(img))
-                except Exception:
-                    text = ""
-                texts.append(text)
-            return {"ocr_text": "\n".join([f"No. {i} pictures, content: {txt}" for i, txt in enumerate(texts) if txt])}
-        return {}
+        if not images:
+            return {}
+
+        max_images = params.get("max_images")
+        try:
+            if max_images is not None:
+                max_images = max(0, int(max_images))
+        except (TypeError, ValueError):
+            max_images = None
+
+        selected_images = images[:max_images] if max_images else images
+        texts: list[str] = []
+        for idx, img in enumerate(selected_images, start=1):
+            try:
+                text = deps.ocr_agent.run(BytesIO(img))
+            except Exception as exc:  # pragma: no cover - safety net
+                logger.warning("OCR agent failed on image %s: %s", idx, exc)
+                text = ""
+            if text:
+                texts.append(f"Image {idx}:\n{text}")
+        if not texts:
+            return {}
+        return {"ocr_text": "\n\n".join(texts)}
 
     def build_query(state: RootState) -> RootState:
+        params = _current_params(state)
         user_q = (state.get("user_query") or "").strip()
         ocr_t = (state.get("ocr_text") or "").strip()
-        if ocr_t:
-            combined = f"{user_q}\n\n[From OCR]\n{ocr_t}"
+        include_ocr = params.get("include_ocr", True)
+        prefix = params.get("prefix") or ""
+        postfix = params.get("postfix") or ""
+
+        sections: list[str] = []
+        if prefix:
+            sections.append(str(prefix))
+        if user_q:
+            sections.append(user_q)
+        if include_ocr and ocr_t:
+            sections.append("[OCR]\n" + ocr_t)
+        if postfix:
+            sections.append(str(postfix))
+
+        combined = "\n\n".join(section for section in sections if section)
+        return {"combined_query": combined or user_q}
+
+    def search_both(state: RootState) -> RootState:
+        params = _current_params(state)
+        query = (state.get("combined_query") or state.get("user_query") or "").strip()
+        if not query:
+            return {}
+
+        video_top_k = params.get("video_top_k")
+        textbook_top_k = params.get("textbook_top_k")
+
+        try:
+            video_result = deps.video_rag.search(query)
+        except Exception as exc:  # pragma: no cover - retrieval failure safeguard
+            logger.warning("Video RAG search failed: %s", exc)
+            video_result = {"query": query, "hits": [], "error": str(exc)}
         else:
-            combined = user_q
-        return {"combined_query": combined}
+            if not isinstance(video_result, dict):
+                video_result = {"query": query, "hits": video_result}
+        if isinstance(video_result, dict) and video_top_k is not None:
+            try:
+                k = max(0, int(video_top_k))
+                if isinstance(video_result.get("hits"), list):
+                    video_result["hits"] = video_result["hits"][:k]
+            except (TypeError, ValueError):
+                pass
 
-    def search_video(state: RootState) -> RootState:
-        query = state["combined_query"]
         try:
-            result: Dict[str, Any] = deps.video_rag.search(query)
-        except Exception as exc:
-            result = {"query": query, "hits": [], "error": str(exc)}
-        return {"video": result}
+            textbook_result = deps.textbook_rag.search(query)
+        except Exception as exc:  # pragma: no cover - retrieval failure safeguard
+            logger.warning("Textbook RAG search failed: %s", exc)
+            textbook_result = {"query": query, "content": "", "error": str(exc)}
+        else:
+            if isinstance(textbook_result, dict):
+                pass
+            else:
+                textbook_result = {"query": query, "content": textbook_result}
+        if isinstance(textbook_result, dict) and textbook_top_k is not None:
+            try:
+                k = max(0, int(textbook_top_k))
+                content = textbook_result.get("content")
+                if isinstance(content, list):
+                    textbook_result["content"] = content[:k]
+            except (TypeError, ValueError):
+                pass
 
-    def search_textbook(state: RootState) -> RootState:
-        query = state["combined_query"]
-        try:
-            result: Dict[str, Any] = deps.textbook_rag.search(query)
-        except Exception as exc:
-            result = {"query": query, "hits": [], "error": str(exc)}
-        return {"textbook": result}
-
-    def join_barrier(state: RootState) -> RootState:
-        return {}
+        return {"video": video_result, "textbook": textbook_result}
 
     def math_reasoning(state: RootState) -> RootState:
+        params = _current_params(state)
+        instruction = params.get("instruction", "Solve")
+        if instruction not in _ALLOWED_INSTRUCTIONS:
+            logger.warning("Invalid instruction '%s', defaulting to Solve", instruction)
+            instruction = "Solve"
+        prompt_override = params.get("prompt")
+
+        context_chunks: list[str] = []
+        if prompt_override:
+            context_chunks.append(str(prompt_override))
+        video_ctx = state.get("video")
+        if video_ctx:
+            context_chunks.append("[Video Retrieval]\n" + json.dumps(video_ctx, ensure_ascii=False))
+        textbook_ctx = state.get("textbook")
+        if textbook_ctx:
+            context_chunks.append("[Textbook Retrieval]\n" + json.dumps(textbook_ctx, ensure_ascii=False))
+        ocr_text = (state.get("ocr_text") or "").strip()
+        if ocr_text:
+            context_chunks.append("[OCR]\n" + ocr_text)
+
+        prompt = "\n\n".join(context_chunks) or None
+        instruction_value: Instruction = cast(Instruction, instruction)
         try:
             explanation = deps.math_agent.explain(
                 question=state.get("user_query", "") or "",
-                video_ctx=state.get("video", {}) or {},
-                textbook_ctx=state.get("textbook", {}) or {},
-                ocr_text=state.get("ocr_text", "") or "",
+                instruction=instruction_value,
+                prompt=prompt,
             )
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - fallback path
+            logger.warning("Math agent failed: %s", exc)
             explanation = f"（数学讲解生成失败：{exc}）"
         return {"math_explanation": explanation}
 
-    def format_output(state: RootState) -> RootState:
-        reply = state.get("math_explanation") or "（暂无可用讲解）"
-        state["reply_to_user"] = reply
-        return {
+    def finalize(state: RootState) -> RootState:
+        params = _current_params(state)
+        reply = params.get("override_reply") or state.get("math_explanation")
+        if not reply:
+            reply = "（暂无可用讲解）"
+        result = {
             "video": state.get("video", {}),
             "textbook": state.get("textbook", {}),
-            "reply_to_user": state.get("reply_to_user", ""),
+            "reply_to_user": reply,
         }
+        return result
 
+    def route(state: RootState) -> str:
+        decision = state.get("decision", {})
+        if isinstance(decision, Mapping):
+            nxt = decision.get("next")
+            if isinstance(nxt, str):
+                return nxt
+        return "finalize"
+
+    graph.add_node("supervisor", supervisor_node)
     graph.add_node("ocr", ocr)
     graph.add_node("build_query", build_query)
-    graph.add_node("search_video", search_video)
-    graph.add_node("search_textbook", search_textbook)
-    graph.add_node("join", join_barrier)
-    graph.add_node("math_agent", math_reasoning)
-    graph.add_node("format_output", format_output)
+    graph.add_node("search_both", search_both)
+    graph.add_node("math", math_reasoning)
+    graph.add_node("finalize", finalize)
 
-    graph.add_edge(START, "ocr")
-    graph.add_edge("ocr", "build_query")
-    graph.add_edge("build_query", "search_video")
-    graph.add_edge("build_query", "search_textbook")
-    graph.add_edge("search_video", "join")
-    graph.add_edge("search_textbook", "join")
-    graph.add_edge("join", "math_agent")
-    graph.add_edge("math_agent", "format_output")
-    graph.add_edge("format_output", END)
+    graph.add_edge(START, "supervisor")
+    graph.add_conditional_edges(
+        "supervisor",
+        route,
+        {
+            "ocr": "ocr",
+            "build_query": "build_query",
+            "search_both": "search_both",
+            "math": "math",
+            "finalize": "finalize",
+        },
+    )
+    graph.add_edge("ocr", "supervisor")
+    graph.add_edge("build_query", "supervisor")
+    graph.add_edge("search_both", "supervisor")
+    graph.add_edge("math", "supervisor")
+    graph.add_edge("finalize", END)
 
     return graph.compile()
