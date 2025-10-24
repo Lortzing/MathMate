@@ -23,25 +23,14 @@ app.add_middleware(
 
 root_graph = create_default_graph()
 
-def _agent_name() -> str:
-    return os.getenv("COPILOT_AGENT_NAME", "mathmate")
-
-
-def _agent_path(default_name: str) -> str:
-    return os.getenv("COPILOT_AGENT_PATH", f"/agents/{default_name}")
-
-
-agent_name = _agent_name()
-agent_path = _agent_path(agent_name)
-
 add_langgraph_fastapi_endpoint(
     app=app,
     agent=LangGraphAGUIAgent(
-        name=agent_name,
+        name="MathMate",
         description="MathMate LangGraph workflow exposed for CopilotKit.",
         graph=root_graph,
     ),
-    path=agent_path,
+    path="/chat",
 )
 
 

@@ -6,6 +6,7 @@ from io import BytesIO
 from typing import Any, Dict, Mapping, cast
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.agents.protocols import (
     MathAgentProtocol,
@@ -238,5 +239,8 @@ def build_root_graph(deps: RootGraphDeps):
     graph.add_edge("search_both", "supervisor")
     graph.add_edge("math", "supervisor")
     graph.add_edge("finalize", END)
+    
+    memory = MemorySaver()              # ★ 新增：内存检查点
+    app = graph.compile(checkpointer=memory)
 
     return graph.compile()

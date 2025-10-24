@@ -3,7 +3,7 @@
 import { CopilotKit } from "@copilotkit/react-core";
 import { ReactNode, useMemo } from "react";
 
-const DEFAULT_RUNTIME_URL = "http://localhost:4000/copilotkit";
+const DEFAULT_RUNTIME_URL = "http://localhost:4000/";
 const DEFAULT_AGENT_NAME = "mathmate";
 
 export function Providers({ children }: { children: ReactNode }) {

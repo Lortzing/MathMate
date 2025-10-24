@@ -15,7 +15,7 @@ const runtime = new CopilotRuntime({
 });
 
   const handler = copilotRuntimeNodeHttpEndpoint({
-    endpoint: '/copilotkit',
+    endpoint: '/mathmate',
     runtime,
     serviceAdapter,
   });
@@ -24,5 +24,5 @@ const runtime = new CopilotRuntime({
 });
 
 server.listen(4000, () => {
-  console.log('Listening at http://localhost:4000/copilotkit');
+  console.log('Listening at http://localhost:4000');
 });

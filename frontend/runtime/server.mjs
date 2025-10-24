@@ -8,7 +8,7 @@ import {
 
 const agentName = process.env.COPILOTKIT_AGENT_NAME ?? "mathmate";
 const agentUrl =
-  process.env.COPILOTKIT_AGENT_URL ?? "http://localhost:8000/agents/mathmate";
+  process.env.COPILOTKIT_AGENT_URL ?? "http://localhost:8000";
 
 const serviceAdapter = new ExperimentalEmptyAdapter();
 
@@ -19,7 +19,7 @@ const runtime = new CopilotRuntime({
 });
 
 const handler = copilotRuntimeNodeHttpEndpoint({
-  endpoint: "/copilotkit",
+  endpoint: "/mathmate",
   runtime,
   serviceAdapter,
 });
@@ -30,6 +30,6 @@ const server = createServer((req, res) => handler(req, res));
 
 server.listen(port, () => {
   console.log(
-    `Copilot runtime listening at http://localhost:${port}/copilotkit for agent '${agentName}' -> ${agentUrl}`,
+    `Copilot runtime listening at http://localhost:${port}/mathmate for agent '${agentName}' -> ${agentUrl}`,
   );
 });
