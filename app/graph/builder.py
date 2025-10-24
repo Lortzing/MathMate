@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any, Dict, Mapping, cast
+from typing import Any, Dict, Mapping, Tuple, cast
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import StreamWriter
@@ -57,6 +58,121 @@ def build_root_graph(deps: RootGraphDeps):
             params = {}
         return params if isinstance(params, dict) else {}
 
+    def _compose_query(
+        user_q: str,
+        ocr_t: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> str:
+        params = params or {}
+        include_ocr = params.get("include_ocr", True)
+        prefix = params.get("prefix") or ""
+        postfix = params.get("postfix") or ""
+
+        sections: list[str] = []
+        if prefix:
+            sections.append(str(prefix))
+        if user_q:
+            sections.append(user_q)
+        if include_ocr and ocr_t:
+            sections.append("[OCR]\n" + ocr_t)
+        if postfix:
+            sections.append(str(postfix))
+
+        combined = "\n\n".join(section for section in sections if section)
+        return combined or user_q
+
+    def _process_video_result(
+        raw_result: Any,
+        *,
+        query: str,
+        video_top_k: Any = None,
+    ) -> Dict[str, Any]:
+        if isinstance(raw_result, Exception):
+            logger.warning("Video RAG search failed: %s", raw_result)
+            return {"query": query, "hits": [], "error": str(raw_result)}
+
+        video_result: Dict[str, Any]
+        if isinstance(raw_result, dict):
+            video_result = {"query": query, **raw_result}
+            if "query" not in raw_result:
+                video_result["query"] = query
+        else:
+            video_result = {"query": query, "hits": raw_result}
+
+        if isinstance(video_result.get("hits"), list) and video_top_k is not None:
+            try:
+                k = max(0, int(video_top_k))
+            except (TypeError, ValueError):
+                k = None
+            if k is not None:
+                video_result["hits"] = video_result["hits"][:k]
+
+        return video_result
+
+    def _process_textbook_result(
+        raw_result: Any,
+        *,
+        query: str,
+        textbook_top_k: Any = None,
+    ) -> Dict[str, Any]:
+        if isinstance(raw_result, Exception):
+            logger.warning("Textbook RAG search failed: %s", raw_result)
+            return {"query": query, "content": "", "error": str(raw_result)}
+
+        if isinstance(raw_result, dict):
+            textbook_result = {"query": query, **raw_result}
+            if "query" not in raw_result:
+                textbook_result["query"] = query
+        else:
+            textbook_result = {"query": query, "content": raw_result}
+
+        if textbook_top_k is not None:
+            try:
+                k = max(0, int(textbook_top_k))
+            except (TypeError, ValueError):
+                k = None
+            if k is not None:
+                content = textbook_result.get("content")
+                if isinstance(content, list):
+                    textbook_result["content"] = content[:k]
+
+        return textbook_result
+
+    async def _auto_search(query: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        async def _run_video():
+            try:
+                return await asyncio.to_thread(deps.video_rag.search, query)
+            except Exception as exc:  # pragma: no cover - background safeguard
+                return exc
+
+        async def _run_textbook():
+            try:
+                return await asyncio.to_thread(deps.textbook_rag.search, query)
+            except Exception as exc:  # pragma: no cover - background safeguard
+                return exc
+
+        video_raw, textbook_raw = await asyncio.gather(
+            _run_video(),
+            _run_textbook(),
+            return_exceptions=False,
+        )
+
+        video_result = _process_video_result(video_raw, query=query)
+        textbook_result = _process_textbook_result(textbook_raw, query=query)
+        return video_result, textbook_result
+
+    def _run_coroutine(coro_factory):
+        try:
+            return asyncio.run(coro_factory())
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                return loop.run_until_complete(coro_factory())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+
     def supervisor_node(state: RootState) -> RootState:
         action = supervisor.decide(state)
         logger.debug("Supervisor decided: %s", action)
@@ -68,13 +184,7 @@ def build_root_graph(deps: RootGraphDeps):
             }
         }
 
-    def ocr(state: RootState) -> RootState:
-        params = _current_params(state)
-        images = state.get("images", [])
-        if not images:
-            return {}
-
-        max_images = params.get("max_images")
+    def _perform_ocr(images: list[bytes], max_images: Any = None) -> Dict[str, Any]:
         try:
             if max_images is not None:
                 max_images = max(0, int(max_images))
@@ -95,25 +205,51 @@ def build_root_graph(deps: RootGraphDeps):
             return {}
         return {"ocr_text": "\n\n".join(texts)}
 
+    def bootstrap(state: RootState) -> RootState:
+        updates: Dict[str, Any] = {}
+        images = state.get("images", [])
+        if images:
+            ocr_update = _perform_ocr(images)
+            if ocr_update:
+                updates.update(ocr_update)
+                updates["_auto_ocr"] = True
+
+        user_q = (state.get("user_query") or "").strip()
+        ocr_t = (updates.get("ocr_text") or state.get("ocr_text") or "").strip()
+        combined_query = _compose_query(user_q, ocr_t)
+        if combined_query:
+            updates["combined_query"] = combined_query
+            try:
+                video_result, textbook_result = _run_coroutine(
+                    lambda: _auto_search(combined_query)
+                )
+            except Exception as exc:  # pragma: no cover - safeguard
+                logger.warning("Automatic search failed: %s", exc)
+            else:
+                updates["video"] = video_result
+                updates["textbook"] = textbook_result
+                updates["_auto_search_results"] = {
+                    "video": video_result,
+                    "textbook": textbook_result,
+                    "query": combined_query,
+                }
+                updates["_auto_search_seen"] = False
+        return updates
+
+    def ocr(state: RootState) -> RootState:
+        params = _current_params(state)
+        images = state.get("images", [])
+        if not images:
+            return {}
+
+        result = _perform_ocr(images, params.get("max_images"))
+        return result
+
     def build_query(state: RootState) -> RootState:
         params = _current_params(state)
         user_q = (state.get("user_query") or "").strip()
         ocr_t = (state.get("ocr_text") or "").strip()
-        include_ocr = params.get("include_ocr", True)
-        prefix = params.get("prefix") or ""
-        postfix = params.get("postfix") or ""
-
-        sections: list[str] = []
-        if prefix:
-            sections.append(str(prefix))
-        if user_q:
-            sections.append(user_q)
-        if include_ocr and ocr_t:
-            sections.append("[OCR]\n" + ocr_t)
-        if postfix:
-            sections.append(str(postfix))
-
-        combined = "\n\n".join(section for section in sections if section)
+        combined = _compose_query(user_q, ocr_t, params)
         return {"combined_query": combined or user_q}
 
     def search_both(state: RootState) -> RootState:
@@ -122,45 +258,36 @@ def build_root_graph(deps: RootGraphDeps):
         if not query:
             return {}
 
-        video_top_k = params.get("video_top_k")
-        textbook_top_k = params.get("textbook_top_k")
+        auto_results = state.get("_auto_search_results")
+        auto_seen = state.get("_auto_search_seen", True)
+        if isinstance(auto_results, dict) and not auto_seen:
+            video_result = auto_results.get("video") or {}
+            textbook_result = auto_results.get("textbook") or {}
+            return {
+                "video": video_result,
+                "textbook": textbook_result,
+                "_auto_search_seen": True,
+            }
 
-        try:
-            video_result = deps.video_rag.search(query)
-        except Exception as exc:  # pragma: no cover - retrieval failure safeguard
-            logger.warning("Video RAG search failed: %s", exc)
-            video_result = {"query": query, "hits": [], "error": str(exc)}
-        else:
-            if not isinstance(video_result, dict):
-                video_result = {"query": query, "hits": video_result}
-        if isinstance(video_result, dict) and video_top_k is not None:
-            try:
-                k = max(0, int(video_top_k))
-                if isinstance(video_result.get("hits"), list):
-                    video_result["hits"] = video_result["hits"][:k]
-            except (TypeError, ValueError):
-                pass
+        video_result = deps.video_rag.search(query)
+        video_result = _process_video_result(
+            video_result,
+            query=query,
+            video_top_k=params.get("video_top_k"),
+        )
 
-        try:
-            textbook_result = deps.textbook_rag.search(query)
-        except Exception as exc:  # pragma: no cover - retrieval failure safeguard
-            logger.warning("Textbook RAG search failed: %s", exc)
-            textbook_result = {"query": query, "content": "", "error": str(exc)}
-        else:
-            if isinstance(textbook_result, dict):
-                pass
-            else:
-                textbook_result = {"query": query, "content": textbook_result}
-        if isinstance(textbook_result, dict) and textbook_top_k is not None:
-            try:
-                k = max(0, int(textbook_top_k))
-                content = textbook_result.get("content")
-                if isinstance(content, list):
-                    textbook_result["content"] = content[:k]
-            except (TypeError, ValueError):
-                pass
+        textbook_result = deps.textbook_rag.search(query)
+        textbook_result = _process_textbook_result(
+            textbook_result,
+            query=query,
+            textbook_top_k=params.get("textbook_top_k"),
+        )
 
-        return {"video": video_result, "textbook": textbook_result}
+        updates: Dict[str, Any] = {"video": video_result, "textbook": textbook_result}
+        if isinstance(auto_results, dict):
+            updates.setdefault("_auto_search_results", auto_results)
+            updates["_auto_search_seen"] = True
+        return updates
 
     def math_reasoning(state: RootState) -> RootState:
         params = _current_params(state)
@@ -201,11 +328,26 @@ def build_root_graph(deps: RootGraphDeps):
         video = state.get("video", {})
         textbook = state.get("textbook", {})
 
+        params = _current_params(state)
+
         if not stream_mode:
-            params = _current_params(state)
-            reply = params.get("override_reply")
-            reply = supervisor._finalize(state) or reply or ""
-            return {"video": video, "textbook": textbook, "reply_to_user": reply}
+            override = params.get("override_reply")
+            if override is not None:
+                reply = override or ""
+                relevance = supervisor.assess_retrieval(state)
+            else:
+                reply, relevance = supervisor.finalize_with_relevance(state)
+                reply = reply or ""
+
+            best_video = relevance.get("video") if isinstance(relevance, dict) else {}
+            best_textbook = relevance.get("textbook") if isinstance(relevance, dict) else {}
+            return {
+                "video": video,
+                "textbook": textbook,
+                "best_video": best_video or {},
+                "best_textbook": best_textbook or {},
+                "reply_to_user": reply,
+            }
 
         # —— 流式：发“自定义事件” + 同步写回顶层 reply_to_user —— #
         acc = []
@@ -213,6 +355,10 @@ def build_root_graph(deps: RootGraphDeps):
             writer = get_stream_writer()
 
         writer({"type": "final_start"})
+
+        relevance = supervisor.assess_retrieval(state)
+        best_video = relevance.get("video") if isinstance(relevance, dict) else {}
+        best_textbook = relevance.get("textbook") if isinstance(relevance, dict) else {}
 
         for delta in supervisor._finalize_stream(state):
             if not delta:
@@ -224,7 +370,13 @@ def build_root_graph(deps: RootGraphDeps):
         final_reply = "".join(acc) if acc else ""
         writer({"type": "final_end"})
 
-        return {"video": video, "textbook": textbook, "reply_to_user": final_reply}
+        return {
+            "video": video,
+            "textbook": textbook,
+            "best_video": best_video or {},
+            "best_textbook": best_textbook or {},
+            "reply_to_user": final_reply,
+        }
 
     def route(state: RootState) -> str:
         decision = state.get("decision", {})
@@ -234,6 +386,7 @@ def build_root_graph(deps: RootGraphDeps):
                 return nxt
         return "finalize"
 
+    graph.add_node("bootstrap", bootstrap)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("ocr", ocr)
     graph.add_node("build_query", build_query)
@@ -241,7 +394,8 @@ def build_root_graph(deps: RootGraphDeps):
     graph.add_node("math", math_reasoning)
     graph.add_node("finalize", finalize)
 
-    graph.add_edge(START, "supervisor")
+    graph.add_edge(START, "bootstrap")
+    graph.add_edge("bootstrap", "supervisor")
     graph.add_conditional_edges(
         "supervisor",
         route,

@@ -7,9 +7,19 @@ math questions.
 
 ## Architecture Overview
 
-The root supervisor (powered by **qwen3-plus**) calls an LLM every time it needs
-to decide what happens next. The model receives a sanitized view of the shared
-state and returns a structured decision:
+When a request arrives the system now performs several automatic steps before
+the supervisor is consulted:
+
+1. If images are provided they are OCR'd immediately so the transcription can
+   influence the first supervisor turn.
+2. A default combined query (user text + OCR) is produced and the video/textbook
+   retrievers are launched concurrently via `asyncio`. The resulting contexts
+   are attached to the shared state and cached so that the supervisor can reuse
+   them without triggering another retrieval round.
+
+After this bootstrap, the root supervisor (powered by **qwen3-plus**) calls an
+LLM every time it needs to decide what happens next. The model receives a
+sanitized view of the shared state and returns a structured decision:
 
 ```json
 {"next": "math", "params": {"instruction": "Solve"}, "reason": "..."}
@@ -28,13 +38,18 @@ The supervisor can invoke the following components:
   itself is not multimodal).
 - **math_agent** – synthesizes the final explanation using the user's
   question, OCR text, and RAG results.
+- **final assessor** – before responding, the supervisor asynchronously asks a
+  second LLM call (with JSON output) to judge which video hit and textbook
+  slice are most relevant; the choices are returned alongside the final reply.
 
 Every response conforms to the structure:
 
 ```json
 {
-  "video": {...},
+  "video": {...},              # full retrieval payload kept for inspection
   "textbook": {...},
+  "best_video": {...},         # single top candidate selected via JSON call
+  "best_textbook": {...},
   "reply_to_user": "..."
 }
 ```
