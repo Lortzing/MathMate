@@ -25,6 +25,11 @@ class MockVideoRAG:
                     "url": "https://example.com/v2",
                     "score": 0.83,
                 },
+                {
+                    "title": "测试样例，直接通过相关性测试，返回该hit",
+                    "url": "https://example.com/v2",
+                    "score": 0.83,
+                },
             ],
             "source": self.name,
         }
