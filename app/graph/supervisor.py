@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Mapping
 
 from openai import OpenAI
 
@@ -102,7 +103,7 @@ class RootSupervisor:
             params = {}
 
         return Action(next=next_step, params=params, reason=str(reason))
-    
+
     def _finalize(self, state: RootState) -> str:
         sanitized_state = self._summarize_state(state)
         messages = [
@@ -146,6 +147,93 @@ class RootSupervisor:
         )
         content = completion.choices[0].message.content
         return content if content else ""
+
+    async def _finalize_async(self, state: RootState) -> str:
+        return await asyncio.to_thread(self._finalize, state)
+
+    async def _assess_retrieval_async(self, state: RootState) -> Dict[str, Any]:
+        payload = self._build_retrieval_payload(state)
+        if not payload["video"] and not payload["textbook"]:
+            return {}
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an analyst that reviews retrieval results for a math tutoring system. "
+                    "Given the user query and retrieved candidates, pick the single most relevant video and textbook page. "
+                    "Return a JSON object with keys 'video' and 'textbook'. Each key should contain an object with fields 'selection' (summarize the chosen item), 'reason', and optional metadata such as 'url' or 'page'. "
+                    "If no suitable candidate exists for a modality, set it to null."
+                ),
+            },
+            {
+                "role": "user",
+                "content": "Current retrieval context (JSON):\n"
+                + json.dumps(payload, ensure_ascii=False),
+            },
+        ]
+
+        def _call() -> Dict[str, Any]:
+            completion = self.client.chat.completions.create(
+                model=Config.ROOT_MODEL,
+                messages=messages,
+                response_format={"type": "json_object"},
+            )
+            content = completion.choices[0].message.content or "{}"
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError:
+                logger.warning("Retrieval relevance JSON parsing failed: %s", content)
+                return {}
+            return data if isinstance(data, dict) else {}
+
+        return await asyncio.to_thread(_call)
+
+    async def _finalize_and_assess(self, state: RootState) -> tuple[str, Dict[str, Any]]:
+        results = await asyncio.gather(
+            self._finalize_async(state),
+            self._assess_retrieval_async(state),
+            return_exceptions=True,
+        )
+
+        reply: str
+        relevance: Dict[str, Any]
+
+        final_result, relevance_result = results
+
+        if isinstance(final_result, Exception):
+            logger.warning("Finalize async failed: %s", final_result)
+            reply = self._finalize(state)
+        else:
+            reply = final_result or ""
+
+        if isinstance(relevance_result, Exception):
+            logger.warning("Retrieval assessment failed: %s", relevance_result)
+            relevance = {}
+        else:
+            relevance = relevance_result if isinstance(relevance_result, dict) else {}
+
+        return reply, relevance
+
+    def finalize_with_relevance(self, state: RootState) -> tuple[str, Dict[str, Any]]:
+        def _coro():
+            return self._finalize_and_assess(state)
+
+        try:
+            return self._run_async(_coro)
+        except Exception as exc:  # pragma: no cover - safeguard
+            logger.warning("Concurrent finalize failed, falling back: %s", exc)
+            return self._finalize(state), {}
+
+    def assess_retrieval(self, state: RootState) -> Dict[str, Any]:
+        def _coro():
+            return self._assess_retrieval_async(state)
+
+        try:
+            return self._run_async(_coro)
+        except Exception as exc:  # pragma: no cover - safeguard
+            logger.warning("Retrieval assessment failed: %s", exc)
+            return {}
 
     def _finalize_stream(self, state: RootState):
         """
@@ -209,6 +297,8 @@ class RootSupervisor:
     def _summarize_state(self, state: RootState) -> Dict[str, Any]:
         summary: Dict[str, Any] = {}
         for key, value in state.items():
+            if key in {"_auto_search_results", "_auto_search_seen", "_auto_ocr"}:
+                continue
             if key == "images":
                 summary[key] = f"{len(value)} image(s)" if isinstance(value, list) else "unknown"
             elif key in {"video", "textbook"}:
@@ -225,6 +315,49 @@ class RootSupervisor:
             else:
                 summary[key] = value
         return summary
+
+    def _build_retrieval_payload(self, state: RootState) -> Dict[str, Any]:
+        def _video_candidates(source: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+            if not isinstance(source, Mapping):
+                return []
+            hits = source.get("hits")
+            if isinstance(hits, list):
+                return [h for h in hits if isinstance(h, Mapping)]
+            return []
+
+        def _textbook_candidates(source: Mapping[str, Any] | None) -> list[Mapping[str, Any]] | str:
+            if not isinstance(source, Mapping):
+                return ""
+            content = source.get("content")
+            if isinstance(content, list):
+                return [c for c in content if isinstance(c, Mapping)]
+            return content if isinstance(content, str) else ""
+
+        video_payload = _video_candidates(state.get("video"))
+        if not video_payload and isinstance(state.get("_auto_search_results"), Mapping):
+            video_payload = _video_candidates(state["_auto_search_results"].get("video"))
+
+        textbook_payload = _textbook_candidates(state.get("textbook"))
+        if (not textbook_payload) and isinstance(state.get("_auto_search_results"), Mapping):
+            textbook_payload = _textbook_candidates(state["_auto_search_results"].get("textbook"))
+
+        return {
+            "user_query": state.get("user_query", ""),
+            "video": video_payload,
+            "textbook": textbook_payload,
+        }
+
+    def _run_async(self, coro_factory):
+        try:
+            return asyncio.run(coro_factory())
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                return loop.run_until_complete(coro_factory())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
 
     def _fallback_decision(self, state: RootState) -> Action:
         user_q = (state.get("user_query") or "").strip()
