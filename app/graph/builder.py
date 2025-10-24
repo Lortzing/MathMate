@@ -6,6 +6,8 @@ from io import BytesIO
 from typing import Any, Dict, Mapping, cast
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import StreamWriter
+from langgraph.config import get_stream_writer  # 仅当你想在函数内自行获取
 
 from app.agents.protocols import (
     MathAgentProtocol,
@@ -194,18 +196,35 @@ def build_root_graph(deps: RootGraphDeps):
             explanation = f"（数学讲解生成失败：{exc}）"
         return {"math_explanation": explanation}
 
-    def finalize(state: RootState) -> dict:
-        params = _current_params(state)
-        reply = params.get("override_reply") or state.get("math_explanation")
-        reply = supervisor._finalize(state)
-        if not reply:
-            reply = "（暂无可用讲解）"
-        result = {
-            "video": state.get("video", {}),
-            "textbook": state.get("textbook", {}),
-            "reply_to_user": reply,
-        }
-        return result
+    def finalize(state: RootState, writer: StreamWriter | None = None):
+        stream_mode = bool(state.get("_stream", False))
+        video = state.get("video", {})
+        textbook = state.get("textbook", {})
+
+        if not stream_mode:
+            params = _current_params(state)
+            reply = params.get("override_reply")
+            reply = supervisor._finalize(state) or reply or ""
+            return {"video": video, "textbook": textbook, "reply_to_user": reply}
+
+        # —— 流式：发“自定义事件” + 同步写回顶层 reply_to_user —— #
+        acc = []
+        if writer is None:
+            writer = get_stream_writer()
+
+        writer({"type": "final_start"})
+
+        for delta in supervisor._finalize_stream(state):
+            if not delta:
+                continue
+            acc.append(delta)
+            writer({"type": "final_delta", "delta": delta})
+            yield {"reply_to_user": "".join(acc)}
+
+        final_reply = "".join(acc) if acc else ""
+        writer({"type": "final_end"})
+
+        return {"video": video, "textbook": textbook, "reply_to_user": final_reply}
 
     def route(state: RootState) -> str:
         decision = state.get("decision", {})

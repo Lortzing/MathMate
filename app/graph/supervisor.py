@@ -147,6 +147,65 @@ class RootSupervisor:
         content = completion.choices[0].message.content
         return content if content else ""
 
+    def _finalize_stream(self, state: RootState):
+        """
+        逐段生成最终回答的流。每次 yield 一个新增片段（str）。
+        外层节点负责把片段累积并写回 {"finalize": {"reply_to_user": ...}}。
+        """
+        sanitized_state = self._summarize_state(state)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are the agent of a math multi-agent system at the FINALIZE stage. "
+                    "Your task is to produce the final message that will be shown to the user.\n\n"
+                    "Use the provided shared state (which may contain OCR text, retrieval results, "
+                    "and math reasoning) to compose a clear, accurate answer. "
+                    "Do not include any JSON, metadata, or technical notes — only return the natural-language reply.\n\n"
+                    "Guidelines:\n"
+                    "1. If math reasoning is available, check it carefully and reply to the user with correct steps and results. "
+                    "Accuracy is essential, but clarity and structure also matter.\n"
+                    "2. If textbook or video retrieval results exist, synthesize them concisely "
+                    "(for example: 'According to the textbook...' ).\n"
+                    "3. If OCR text contributed to reasoning, integrate it naturally.\n"
+                    "4. Keep the tone explanatory and user-facing, suitable for math learning.\n"
+                    "5. Respond in the user's language (usually Chinese if the input was Chinese).\n"
+                    "6. Output only the final answer text — no JSON, no lists of actions.\n"
+                    "7. Your output must be directly renderable as Markdown: do not escape newlines, "
+                    "and do not use double backslashes (\\\\) unless they are part of LaTeX math syntax. "
+                    "Use real line breaks and Markdown section headings (###, **bold**, etc.) when needed.\n"
+                    "8. Never include visible escape sequences like '\\n' or '\\t'. Write actual newlines instead.\n"
+                    "9. When writing LaTeX, use single backslashes for commands (e.g., '\\int', '\\frac', '\\ln'), "
+                    "and wrap expressions properly in $...$ or $$...$$. "
+                    "Do not add redundant escapes or JSON-safe quoting — the response should be clean and readable."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Current shared state (JSON):\n" + json.dumps(sanitized_state, ensure_ascii=False)
+                ),
+            },
+        ]
+        # OpenAI 式流式接口（根据你的 SDK 调整）
+        completion = self.client.chat.completions.create(
+            model=Config.ROOT_MODEL,
+            messages=messages,
+            stream=True,
+            stream_options={"include_usage": True}
+        )
+
+        for chunk in completion:
+            try:
+                delta = chunk.choices[0].delta.content or ""
+                
+            except Exception:
+                delta = ""
+            if delta:
+                # 直接 yield 纯文本片段；外层节点负责累积并写回 state
+                yield delta
+
+
     def _summarize_state(self, state: RootState) -> Dict[str, Any]:
         summary: Dict[str, Any] = {}
         for key, value in state.items():

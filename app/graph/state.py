@@ -19,6 +19,8 @@ class RootState(TypedDict, total=False):
 
     # Outputs
     reply_to_user: str
+    finalize: dict
 
     # Supervisor decision (latest action emitted by the root agent)
     decision: Dict[str, Any]
+    _stream: bool

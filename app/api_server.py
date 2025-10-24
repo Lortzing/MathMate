@@ -14,6 +14,7 @@ from app.agents import (
     MathAgent,
 )
 from app.graph import RootGraphDeps, build_root_graph
+from .graph.state import RootState
 
 app = FastAPI(title="Multi-Agent Root API")
 
@@ -28,11 +29,11 @@ root_graph = build_root_graph(deps)
 
 class AskPayload(BaseModel):
     query: str
-    images_b64: List[str] | None = None
+    images_b64: List[str] = []
 
 
-def _build_state_from_payload(payload: AskPayload) -> Dict[str, Any]:
-    state: Dict[str, Any] = {"user_query": payload.query}
+def _build_state_from_payload(payload: AskPayload, _stream=False) -> RootState:
+    state = RootState(user_query=payload.query, images=[], ocr_text="", combined_query="", _stream=_stream)
     print(payload)
     if payload.images_b64:
         import base64
@@ -56,45 +57,78 @@ async def ask(payload: AskPayload) -> Dict[str, Any]:
 
 @app.post("/ask-stream")
 async def ask_stream(payload: AskPayload) -> StreamingResponse:
-    state = _build_state_from_payload(payload)
+    state = _build_state_from_payload(payload, _stream=True)
+
+    def sse_event(d: dict) -> str:
+        return "data: " + json.dumps(d, ensure_ascii=False) + "\n\n"
 
     def event_stream():
+        last_reply = ""
+        final_video, final_textbook = {}, {}
+
         try:
-            for update in root_graph.stream(state, stream_mode="updates"):
-                if not isinstance(update, dict):
-                    continue
+            for mode, chunk in root_graph.stream(
+                state,
+                stream_mode=["custom", "updates"],
+            ):
+                if mode == "custom":
+                    t = chunk.get("type")
+                    if t == "final_delta":
+                        yield sse_event({"type": "final_delta", "data": {"delta": chunk["delta"]}})
+                    elif t == "final_start":
+                        yield sse_event({"type": "action", "data": {"next": "finalize"}})
+                    elif t == "final_end":
+                        pass
 
-                supervisor_update = update.get("supervisor")
-                if supervisor_update and isinstance(supervisor_update, dict):
-                    decision = supervisor_update.get("decision")
-                    if isinstance(decision, dict):
-                        payload = {
-                            "type": "action",
-                            "data": {
-                                "next": decision.get("next"),
-                                "params": decision.get("params", {}),
-                                "reason": decision.get("reason", ""),
-                            },
-                        }
-                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                elif mode == "updates":
+                    upd = chunk
+                    sup = upd.get("supervisor")
+                    if isinstance(sup, dict):
+                        decision = sup.get("decision")
+                        if isinstance(decision, dict):
+                            yield sse_event({
+                                "type": "action",
+                                "data": {
+                                    "next": decision.get("next"),
+                                    "params": decision.get("params", {}),
+                                    "reason": decision.get("reason", ""),
+                                },
+                            })
 
-                finalize_update = update.get("finalize")
-                if finalize_update and isinstance(finalize_update, dict):
-                    result_payload = {
-                        "type": "final",
-                        "data": {
-                            "video": finalize_update.get("video", {}),
-                            "textbook": finalize_update.get("textbook", {}),
-                            "reply_to_user": finalize_update.get("reply_to_user", ""),
-                        },
-                    }
-                    yield f"data: {json.dumps(result_payload, ensure_ascii=False)}\n\n"
-                    break
+                    if "reply_to_user" in upd and isinstance(upd["reply_to_user"], str):
+                        full = upd["reply_to_user"]
+                        if len(full) > len(last_reply):
+                            delta = full[len(last_reply):]
+                            last_reply = full
+                            yield sse_event({"type": "final_delta", "data": {"delta": delta}})
+
+                    if "video" in upd:
+                        final_video = upd.get("video", {}) or final_video
+                    if "textbook" in upd:
+                        final_textbook = upd.get("textbook", {}) or final_textbook
+
+            yield sse_event({
+                "type": "final",
+                "data": {
+                    "video": final_video,
+                    "textbook": final_textbook,
+                    "reply_to_user": last_reply,
+                },
+            })
+
         finally:
-            done_message = {"type": "done"}
-            yield f"data: {json.dumps(done_message, ensure_ascii=False)}\n\n"
+            yield sse_event({"type": "done"})
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 
 @app.post("/ask-multipart")
@@ -106,7 +140,7 @@ async def ask_multipart(
     if files:
         for file in files:
             images.append(await file.read())
-    state: Dict[str, Any] = {"user_query": query}
+    state = _build_state_from_payload(AskPayload(query=query, images_b64=[]))
     if images:
         state["images"] = images
     output = root_graph.invoke(state)
