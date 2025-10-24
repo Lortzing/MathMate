@@ -194,9 +194,10 @@ def build_root_graph(deps: RootGraphDeps):
             explanation = f"（数学讲解生成失败：{exc}）"
         return {"math_explanation": explanation}
 
-    def finalize(state: RootState) -> RootState:
+    def finalize(state: RootState) -> dict:
         params = _current_params(state)
         reply = params.get("override_reply") or state.get("math_explanation")
+        reply = supervisor._finalize(state)
         if not reply:
             reply = "（暂无可用讲解）"
         result = {

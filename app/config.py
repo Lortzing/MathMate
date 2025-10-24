@@ -19,7 +19,7 @@ class Config:
     OCR_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     
     MATH_MODEL = "qwen-math-plus"
-    ROOT_MODEL = "qwen3-plus"
+    ROOT_MODEL = "qwen-plus"
     EMBED_MODEL = "text-embedding-v4"
     OCR_MODEL = "qwen3-vl-plus"
     

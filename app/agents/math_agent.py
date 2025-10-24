@@ -176,5 +176,6 @@ class MathAgent(MathAgentProtocol):
         """
         messages = _build_messages(instruction, question, prompt)
         result = self._call_model(messages) or ""
+        print(result)
 
         return str(result).strip()

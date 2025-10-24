@@ -66,10 +66,10 @@ class RootSupervisor:
                     "You are the root supervisor of a math multi-agent system. "
                     "You orchestrate OCR, query building, retrieval, and math reasoning. "
                     "Always respond with a JSON object containing keys 'next', 'params', and 'reason'. "
-                    "'next' must be one of ['ocr','build_query','search_both','math','finalize']. "
+                    f"'next' must be one of {NextStep}. "
                     "Use 'ocr' to transcribe pending images, 'build_query' to combine user input with OCR, "
                     "'search_both' to call both RAG tools, 'math' to ask the math agent, "
-                    "and 'finalize' when ready to produce the final response. "
+                    "and 'finalize' when ready to produce the final response or nothing to do but generate a simple reply. "
                     "Place any tool-specific options inside 'params'. When no options are needed return an empty object."
                 ),
             },
@@ -91,6 +91,7 @@ class RootSupervisor:
         next_step = data.get("next", "finalize")
         params = data.get("params") or {}
         reason = data.get("reason") or ""
+        print(data)
 
         if next_step not in {"ocr", "build_query", "search_both", "math", "finalize"}:
             logger.warning("Invalid next step from LLM (%s). Falling back to finalize.", next_step)
@@ -101,6 +102,50 @@ class RootSupervisor:
             params = {}
 
         return Action(next=next_step, params=params, reason=str(reason))
+    
+    def _finalize(self, state: RootState) -> str:
+        sanitized_state = self._summarize_state(state)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are the agent of a math multi-agent system at the FINALIZE stage. "
+                    "Your task is to produce the final message that will be shown to the user.\n\n"
+                    "Use the provided shared state (which may contain OCR text, retrieval results, "
+                    "and math reasoning) to compose a clear, accurate answer. "
+                    "Do not include any JSON, metadata, or technical notes — only return the natural-language reply.\n\n"
+                    "Guidelines:\n"
+                    "1. If math reasoning is available, check it carefully and reply to the user with correct steps and results. "
+                    "Accuracy is essential, but clarity and structure also matter.\n"
+                    "2. If textbook or video retrieval results exist, synthesize them concisely "
+                    "(for example: 'According to the textbook...' ).\n"
+                    "3. If OCR text contributed to reasoning, integrate it naturally.\n"
+                    "4. Keep the tone explanatory and user-facing, suitable for math learning.\n"
+                    "5. Respond in the user's language (usually Chinese if the input was Chinese).\n"
+                    "6. Output only the final answer text — no JSON, no lists of actions.\n"
+                    "7. Your output must be **directly renderable as Markdown**: do not escape newlines, "
+                    "and do not use double backslashes (\\\\) unless they are part of LaTeX math syntax. "
+                    "Use real line breaks and Markdown section headings (###, **bold**, etc.) when needed.\n"
+                    "8. Never include visible escape sequences like '\\n' or '\\t'. Write actual newlines instead.\n"
+                    "9. When writing LaTeX, use single backslashes for commands (e.g., '\\int', '\\frac', '\\ln'), "
+                    "and wrap expressions properly in $...$ or $$...$$. "
+                    "Do not add redundant escapes or JSON-safe quoting — the response should be clean and readable."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Current shared state (JSON):\n" + json.dumps(sanitized_state, ensure_ascii=False)
+                ),
+            },
+        ]
+
+        completion = self.client.chat.completions.create(
+            model=Config.ROOT_MODEL,
+            messages=messages,
+        )
+        content = completion.choices[0].message.content
+        return content if content else ""
 
     def _summarize_state(self, state: RootState) -> Dict[str, Any]:
         summary: Dict[str, Any] = {}
@@ -140,4 +185,3 @@ class RootSupervisor:
         if combined and not has_math:
             return Action(next="math", reason="Generate math explanation")
         return Action(next="finalize", reason="All steps completed or nothing to do")
-*** End of File

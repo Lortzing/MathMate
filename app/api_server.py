@@ -32,10 +32,11 @@ class AskPayload(BaseModel):
 @app.post("/ask")
 async def ask(payload: AskPayload) -> Dict[str, Any]:
     state: Dict[str, Any] = {"user_query": payload.query}
+    print(payload)
     if payload.images_b64:
         import base64
 
-        images = [base64.b64decode(item) for item in payload.images_b64]
+        images = [base64.b64decode(item) for item in payload.images_b64 if item]
         state["images"] = images
     output = root_graph.invoke(state)
     return {
@@ -63,3 +64,7 @@ async def ask_multipart(
         "textbook": output.get("textbook", {}),
         "reply_to_user": output.get("reply_to_user", ""),
     }
+
+@app.get("/health")
+async def root():
+    return {"message": "Hello World", "docs_url": app.docs_url}
