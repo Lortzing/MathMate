@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-import asyncio
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, Literal, Mapping
+from concurrent.futures import ThreadPoolExecutor
 
 from openai import OpenAI
 
@@ -92,7 +93,6 @@ class RootSupervisor:
         next_step = data.get("next", "finalize")
         params = data.get("params") or {}
         reason = data.get("reason") or ""
-        print(data)
 
         if next_step not in {"ocr", "build_query", "search_both", "math", "finalize"}:
             logger.warning("Invalid next step from LLM (%s). Falling back to finalize.", next_step)
@@ -148,22 +148,18 @@ class RootSupervisor:
         content = completion.choices[0].message.content
         return content if content else ""
 
-    async def _finalize_async(self, state: RootState) -> str:
-        return await asyncio.to_thread(self._finalize, state)
-
-    async def _assess_retrieval_async(self, state: RootState) -> Dict[str, Any]:
+    def assess_retrieval_sync(self, state: RootState) -> Dict[str, Any]:
         payload = self._build_retrieval_payload(state)
         if not payload["video"] and not payload["textbook"]:
             return {}
-
         messages = [
             {
                 "role": "system",
                 "content": (
                     "You are an analyst that reviews retrieval results for a math tutoring system. "
-                    "Given the user query and retrieved candidates, pick the single most relevant video and textbook page. "
-                    "Return a JSON object with keys 'video' and 'textbook'. Each key should contain an object with fields 'selection' (summarize the chosen item), 'reason', and optional metadata such as 'url' or 'page'. "
-                    "If no suitable candidate exists for a modality, set it to null."
+                    "Given the user query and retrieved candidates, pick the 3 most relevant videos and  textbook pages, and arrange in reverse order of the relevance you think. If the relevant content is less than 3, pick as many as you can. "
+                    "Return a JSON object with keys 'video' and 'textbook'. Each key should contain an object with fields 'selection' (summarize the chosen item, just 5~6 words, start with tag such as '[例题]', '[题解]', '[方法]', '[知识点]'), 'reason', 'rank' (int, numerical order for relevance, '1' is the most relevant), and 'url' for video or 'page' for textbook (int, only one number for each). "
+                    'If no suitable candidate exists for a modality, set it to null. Such as {"video": null}, {"textbook": null}'
                 ),
             },
             {
@@ -172,66 +168,43 @@ class RootSupervisor:
                 + json.dumps(payload, ensure_ascii=False),
             },
         ]
-
-        def _call() -> Dict[str, Any]:
-            completion = self.client.chat.completions.create(
-                model=Config.ROOT_MODEL,
-                messages=messages,
-                response_format={"type": "json_object"},
-            )
-            content = completion.choices[0].message.content or "{}"
-            try:
-                data = json.loads(content)
-            except json.JSONDecodeError:
-                logger.warning("Retrieval relevance JSON parsing failed: %s", content)
-                return {}
-            return data if isinstance(data, dict) else {}
-
-        return await asyncio.to_thread(_call)
-
-    async def _finalize_and_assess(self, state: RootState) -> tuple[str, Dict[str, Any]]:
-        results = await asyncio.gather(
-            self._finalize_async(state),
-            self._assess_retrieval_async(state),
-            return_exceptions=True,
+        completion = self.client.chat.completions.create(
+            model=Config.ROOT_MODEL,
+            messages=messages,
+            response_format={"type": "json_object"},
         )
-
-        reply: str
-        relevance: Dict[str, Any]
-
-        final_result, relevance_result = results
-
-        if isinstance(final_result, Exception):
-            logger.warning("Finalize async failed: %s", final_result)
-            reply = self._finalize(state)
-        else:
-            reply = final_result or ""
-
-        if isinstance(relevance_result, Exception):
-            logger.warning("Retrieval assessment failed: %s", relevance_result)
-            relevance = {}
-        else:
-            relevance = relevance_result if isinstance(relevance_result, dict) else {}
-
-        return reply, relevance
+        content = completion.choices[0].message.content or "{}"
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            logger.warning("Retrieval relevance JSON parsing failed: %s", content)
+            return {}
+        return data if isinstance(data, dict) else {}
 
     def finalize_with_relevance(self, state: RootState) -> tuple[str, Dict[str, Any]]:
-        def _coro():
-            return self._finalize_and_assess(state)
-
-        try:
-            return self._run_async(_coro)
-        except Exception as exc:  # pragma: no cover - safeguard
-            logger.warning("Concurrent finalize failed, falling back: %s", exc)
-            return self._finalize(state), {}
+        """同步并发：线程池并行跑 finalize 与相关性评估。"""
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f1 = ex.submit(self._finalize, state)
+            f2 = ex.submit(self.assess_retrieval_sync, state)
+            try:
+                reply = f1.result() or ""
+            except Exception as exc:
+                logger.warning("Finalize failed: %s", exc)
+                reply = self._finalize(state) or ""
+            try:
+                relevance = f2.result()
+                if not isinstance(relevance, dict):
+                    relevance = {}
+            except Exception as exc:
+                logger.warning("Retrieval assessment failed: %s", exc)
+                relevance = {}
+        return reply, relevance
 
     def assess_retrieval(self, state: RootState) -> Dict[str, Any]:
-        def _coro():
-            return self._assess_retrieval_async(state)
-
+        """向后兼容：同步版本"""
         try:
-            return self._run_async(_coro)
-        except Exception as exc:  # pragma: no cover - safeguard
+            return self.assess_retrieval_sync(state)
+        except Exception as exc:
             logger.warning("Retrieval assessment failed: %s", exc)
             return {}
 
@@ -283,6 +256,7 @@ class RootSupervisor:
             stream_options={"include_usage": True}
         )
 
+        acc = []
         for chunk in completion:
             try:
                 delta = chunk.choices[0].delta.content or ""
@@ -290,8 +264,9 @@ class RootSupervisor:
             except Exception:
                 delta = ""
             if delta:
-                # 直接 yield 纯文本片段；外层节点负责累积并写回 state
+                acc.append(delta)
                 yield delta
+        return {"reply_to_user": "".join(acc)}
 
 
     def _summarize_state(self, state: RootState) -> Dict[str, Any]:
@@ -346,18 +321,6 @@ class RootSupervisor:
             "video": video_payload,
             "textbook": textbook_payload,
         }
-
-    def _run_async(self, coro_factory):
-        try:
-            return asyncio.run(coro_factory())
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(loop)
-                return loop.run_until_complete(coro_factory())
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
 
     def _fallback_decision(self, state: RootState) -> Action:
         user_q = (state.get("user_query") or "").strip()

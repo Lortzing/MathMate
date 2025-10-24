@@ -95,8 +95,8 @@ class TextbookRAG(TextbookRAGProtocol):
         hits = list(zip(idxs[0].tolist(), scores[0].tolist()))
 
         # 打印一个可视化的命中列表（非必须）
-        print("==== 命中切片（用于答案的上下文） ====")
-        print(self._build_context(meta, hits))
+        # print("==== 命中切片（用于答案的上下文） ====")
+        # print(self._build_context(meta, hits))
 
         return self._build_context(meta, hits)
 

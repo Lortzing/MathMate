@@ -34,7 +34,6 @@ class AskPayload(BaseModel):
 
 def _build_state_from_payload(payload: AskPayload, _stream=False) -> RootState:
     state = RootState(user_query=payload.query, images=[], ocr_text="", combined_query="", _stream=_stream)
-    print(payload)
     if payload.images_b64:
         import base64
 
@@ -64,7 +63,8 @@ async def ask_stream(payload: AskPayload) -> StreamingResponse:
 
     def event_stream():
         last_reply = ""
-        final_video, final_textbook = {}, {}
+        best_video = ""
+        best_textbook = ""
 
         try:
             for mode, chunk in root_graph.stream(
@@ -78,7 +78,7 @@ async def ask_stream(payload: AskPayload) -> StreamingResponse:
                     elif t == "final_start":
                         yield sse_event({"type": "action", "data": {"next": "finalize"}})
                     elif t == "final_end":
-                        pass
+                        yield sse_event({"type": "final_end"})
 
                 elif mode == "updates":
                     upd = chunk
@@ -94,24 +94,19 @@ async def ask_stream(payload: AskPayload) -> StreamingResponse:
                                     "reason": decision.get("reason", ""),
                                 },
                             })
-
-                    if "reply_to_user" in upd and isinstance(upd["reply_to_user"], str):
-                        full = upd["reply_to_user"]
+                    fnl = upd.get("finalize", {})
+                    if "reply_to_user" in fnl and isinstance(fnl.get("reply_to_user", None), str):
+                        full = fnl.get("reply_to_user", "")
                         if len(full) > len(last_reply):
-                            delta = full[len(last_reply):]
                             last_reply = full
-                            yield sse_event({"type": "final_delta", "data": {"delta": delta}})
-
-                    if "video" in upd:
-                        final_video = upd.get("video", {}) or final_video
-                    if "textbook" in upd:
-                        final_textbook = upd.get("textbook", {}) or final_textbook
+                    best_video = fnl.get("video") if isinstance(fnl, dict) else {}
+                    best_textbook = fnl.get("textbook") if isinstance(fnl, dict) else {}
 
             yield sse_event({
                 "type": "final",
                 "data": {
-                    "video": final_video,
-                    "textbook": final_textbook,
+                    "video": best_video,
+                    "textbook": best_textbook,
                     "reply_to_user": last_reply,
                 },
             })

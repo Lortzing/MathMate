@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
-import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Dict, Mapping, Tuple, cast
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import StreamWriter
-from langgraph.config import get_stream_writer  # 仅当你想在函数内自行获取
+from langgraph.config import get_stream_writer
 
 from app.agents.protocols import (
     MathAgentProtocol,
@@ -138,40 +138,29 @@ def build_root_graph(deps: RootGraphDeps):
 
         return textbook_result
 
-    async def _auto_search(query: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        async def _run_video():
+    def _auto_search_sync(query: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """同步并发：在线程池里并行跑 video/textbook 检索。"""
+        def _run_video():
             try:
-                return await asyncio.to_thread(deps.video_rag.search, query)
-            except Exception as exc:  # pragma: no cover - background safeguard
+                return deps.video_rag.search(query)
+            except Exception as exc:
                 return exc
 
-        async def _run_textbook():
+        def _run_textbook():
             try:
-                return await asyncio.to_thread(deps.textbook_rag.search, query)
-            except Exception as exc:  # pragma: no cover - background safeguard
+                return deps.textbook_rag.search(query)
+            except Exception as exc:
                 return exc
 
-        video_raw, textbook_raw = await asyncio.gather(
-            _run_video(),
-            _run_textbook(),
-            return_exceptions=False,
-        )
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f1 = ex.submit(_run_video)
+            f2 = ex.submit(_run_textbook)
+            video_raw = f1.result()
+            textbook_raw = f2.result()
 
         video_result = _process_video_result(video_raw, query=query)
         textbook_result = _process_textbook_result(textbook_raw, query=query)
         return video_result, textbook_result
-
-    def _run_coroutine(coro_factory):
-        try:
-            return asyncio.run(coro_factory())
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(loop)
-                return loop.run_until_complete(coro_factory())
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
 
     def supervisor_node(state: RootState) -> RootState:
         action = supervisor.decide(state)
@@ -220,10 +209,8 @@ def build_root_graph(deps: RootGraphDeps):
         if combined_query:
             updates["combined_query"] = combined_query
             try:
-                video_result, textbook_result = _run_coroutine(
-                    lambda: _auto_search(combined_query)
-                )
-            except Exception as exc:  # pragma: no cover - safeguard
+                video_result, textbook_result = _auto_search_sync(combined_query)
+            except Exception as exc:
                 logger.warning("Automatic search failed: %s", exc)
             else:
                 updates["video"] = video_result
@@ -325,8 +312,6 @@ def build_root_graph(deps: RootGraphDeps):
 
     def finalize(state: RootState, writer: StreamWriter | None = None):
         stream_mode = bool(state.get("_stream", False))
-        video = state.get("video", {})
-        textbook = state.get("textbook", {})
 
         params = _current_params(state)
 
@@ -341,11 +326,10 @@ def build_root_graph(deps: RootGraphDeps):
 
             best_video = relevance.get("video") if isinstance(relevance, dict) else {}
             best_textbook = relevance.get("textbook") if isinstance(relevance, dict) else {}
+            
             return {
-                "video": video,
-                "textbook": textbook,
-                "best_video": best_video or {},
-                "best_textbook": best_textbook or {},
+                "video": best_video,
+                "textbook": best_textbook,
                 "reply_to_user": reply,
             }
 
@@ -356,25 +340,24 @@ def build_root_graph(deps: RootGraphDeps):
 
         writer({"type": "final_start"})
 
-        relevance = supervisor.assess_retrieval(state)
-        best_video = relevance.get("video") if isinstance(relevance, dict) else {}
-        best_textbook = relevance.get("textbook") if isinstance(relevance, dict) else {}
-
         for delta in supervisor._finalize_stream(state):
             if not delta:
                 continue
             acc.append(delta)
             writer({"type": "final_delta", "delta": delta})
-            yield {"reply_to_user": "".join(acc)}
-
-        final_reply = "".join(acc) if acc else ""
         writer({"type": "final_end"})
+        
+        final_reply = "".join(acc) if acc else ""
+        # print(final_reply)
+        
+        
+        relevance = supervisor.assess_retrieval(state)
+        best_video = relevance.get("video", "") if isinstance(relevance, dict) else {}
+        best_textbook = relevance.get("textbook", "") if isinstance(relevance, dict) else {}
 
         return {
-            "video": video,
-            "textbook": textbook,
-            "best_video": best_video or {},
-            "best_textbook": best_textbook or {},
+            "video": best_video or {},
+            "textbook": best_textbook or {},
             "reply_to_user": final_reply,
         }
 

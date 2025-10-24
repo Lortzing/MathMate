@@ -129,7 +129,6 @@ def _build_messages(instr: Instruction, question: str, prompt: Optional[str]) ->
         question=(question or "N/A"),
         prompt=(prompt or "N/A"),
     )
-    print(user)
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -176,6 +175,4 @@ class MathAgent(MathAgentProtocol):
         """
         messages = _build_messages(instruction, question, prompt)
         result = self._call_model(messages) or ""
-        print(result)
-
         return str(result).strip()
